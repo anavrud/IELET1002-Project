@@ -1,0 +1,421 @@
+//Biblotek for pointer til string konvertering
+#include <iostream>
+#include <string>
+
+//Bibliotek for WiFi
+#include <WiFi.h>
+#include <WebServer.h>
+
+//Bibliotek for klokke
+#include <time.h>
+
+//Bibliotek for display
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+//Bibliotek for OLED display
+#define OLED_RESET 4
+Adafruit_SSD1306 display(OLED_RESET);
+
+//Biblotek for server
+#include <PubSubClient.h>
+
+//Bibliotek for temperatur
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+//Temp sensor oppsett
+const int ONE_WIRE_BUS = 27;                    // DS18B20 kommuniserer via oneWire bus.
+OneWire oneWireLocal(ONE_WIRE_BUS);             // Setter opp en oneWire
+DallasTemperature sensorsLocal(&oneWireLocal);  // Setter opp DallasTemperature
+
+float tempLocal = 0.0;                          // Temperatur-variabel
+
+// SSID & Password - server
+const char* ssid = "Altibox257862";  // Skriv inn SSID
+const char* password = "6h5yV6TU";   //Skriv passord
+
+// Server login
+// bytt ut alle brukernavn og passord med deres egne.
+const char* mqttServer = "192.168.10.160";
+const int mqttPort = 1883;
+const char* mqttUser = "mqtt_user";
+const char* mqttPassword = "#mqtt1213";
+
+WiFiClient esp1Client;
+PubSubClient client(esp1Client);
+
+// LED Terminals
+const int redLED = 26;
+const int greenLED = 25;
+const int blueLED = 33;
+
+// Button terminal
+const int buttonPin = 35;
+
+// Switch-case default
+int var = 1;
+
+// Kanaler
+const int channelRedLED = 0;
+const int channelGreenLED = 1;
+const int channelBlueLED = 2;
+const int channelBuzzer = 5;
+const int channelTemp = 6;
+
+// Tid-takings variabler
+int period = 2000;
+unsigned long time_now = 0;
+unsigned long wait = 0;
+unsigned long previousMillis = 0;
+unsigned long previousMillis2 = 0;
+
+// Klokke - variabler
+int hoursOffset = 1; // 1 times offset for Norsk tid
+int GMTOffset = (hoursOffset * 60 * 60); // GMT offset i sekunder
+int daylightOffset = 3600;  // Somemrtid offset i sekunder
+                            // (kan være 3600 eller 0)
+// Brann sensor pin
+const int fireSensor = 13;
+
+// Buzzer pin
+const int buzzerPin = 12;
+
+// Alarm status
+int alarmState;
+int prevousAlarmMessage;
+
+// Setup og konfigurering
+void setup() 
+{
+  Serial.begin(115200);                   // Starter seriekommunikasjon
+  Serial.println("Try Connecting to "); 
+  Serial.println(ssid);                   // internettnavn
+
+  // Kobler til WiFi
+  WiFi.begin(ssid, password);             // Kobler til Wi-Fi modem
+
+  // Sjekk Wi-Fi tilkoblet til wi-fi network
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.println("WiFi connected successfully");
+  Serial.print("Got IP: ");
+  Serial.println(WiFi.localIP());  // Viser ESP32 IP i serial
+  delay(3000); // Delay som gir oss tid til å kopiere IP
+
+
+  // Setter opp LED lys utganger
+  pinMode(redLED,   OUTPUT);
+  pinMode(greenLED, OUTPUT);
+  pinMode(blueLED,  OUTPUT);
+  
+  sensorsLocal.begin();                    // Begyn temp-avlesing
+
+  pinMode(buttonPin,  INPUT);              // Setter opp button
+
+  // Setter opp RedLED
+  ledcSetup(channelRedLED, 2000, 8);
+  ledcAttachPin(redLED, channelRedLED);
+  ledcWrite(channelRedLED, 0);
+
+  // Setter opp GreenLED
+  ledcSetup(channelGreenLED, 2000, 8);
+  ledcAttachPin(greenLED, channelGreenLED);
+  ledcWrite(channelGreenLED, 0);
+
+  // Setter opp BlueLED
+  ledcSetup(channelBlueLED, 2000, 8);
+  ledcAttachPin(blueLED, channelBlueLED);
+  ledcWrite(channelBlueLED, 0);
+
+  // Skru på OLED skjerm
+  Wire.begin();
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+
+  // Konfigurer klokke
+  configTime(GMTOffset, daylightOffset, "pool.ntp.org", "time.nist.gov");
+
+  // Setter opp buzzer med PWM
+  pinMode(buzzerPin, OUTPUT);
+  ledcSetup(channelBuzzer, 2000, 8);
+  ledcAttachPin(buzzerPin, channelBuzzer);
+  ledcWrite(channelBuzzer, 0);
+
+  pinMode(fireSensor, INPUT);                // Setter opp fire-sensor pin
+
+  // Server tilkobling
+  client.setCallback(callback);              // Setter opp "lytting fra Pi"
+  if (ssid == "Altibox257862") {
+    WiFi.mode(WIFI_STA);
+    client.setServer(mqttServer, mqttPort);
+
+    // Sjekk server er tilkoblet
+    while (!client.connected())  {
+      Serial.println("Connecting to MQTT...");
+
+      if (client.connect("ESP32Client_temp", mqttUser, mqttPassword)) {   // Hvis server er koblet
+        Serial.println("Connected");
+      }
+
+      else  {                                   // Hvis server ikke er koblet
+        // Får beskjed om at den ikke er tilkoblet
+        Serial.print("Failed with state ");
+        Serial.print(client.state());
+        delay(2000);
+      }
+    }
+  }
+
+  client.subscribe("homeassistant/Pie/Alarm");  // Definerer topic vi subscriber på
+}
+
+// Lokalt display temperatur
+void displayTemp() 
+{
+  // Serial print
+  unsigned long currentMillis = millis();                 // Nåværende millis
+  if (currentMillis - previousMillis >= 3000) {
+    previousMillis = currentMillis;                       // Forrige millis settes som Nåværende, slik at den funker som delay
+    sensorsLocal.requestTemperatures();                   // Bruker dallas temperatur biblotek
+    float tempReading = sensorsLocal.getTempCByIndex(0);  // Leser av temperatur verdier
+
+    // Filter ut feil-lesinger
+    if (tempReading > -100) {
+      tempLocal = tempReading;
+      // Printer til serial
+      Serial.print("Temperaturen er: ");
+      Serial.print(tempLocal);
+      Serial.println(" C");
+    }
+
+    // Koverterings kode
+    char buffer[64];
+    int ret = snprintf(buffer, sizeof buffer, "%f", tempLocal); // Konverteringskode som muligjør sending til MQTT 
+    client.publish("homeassistant/esp/temp", buffer);           // Sender tempLocal til server
+  }
+¨
+  // Klargør display
+  display.clearDisplay();
+  // Setter farge
+  display.setTextColor(WHITE);
+  // Setter skriftstørelsen
+  display.setTextSize(1);
+  // Setter pekerkoordinater
+  display.setCursor(0, 0);
+  // Printer temperatur på lokalt display
+  display.print("Temperature: ");
+  display.print(tempLocal);
+  display.print(" C");
+
+  // Printer alarm status på display
+  if (alarmState == 0) {
+    display.setCursor(0, 10);
+    display.print("Alarm Armed");
+  }
+    else if (alarmState == 1) {
+    display.setCursor(0, 10);
+    display.print("Alarm Disarmed");
+  }
+}
+
+// Lokalt display klokke
+void displayTime()
+{
+  time_t rawtime = time(nullptr);
+  struct tm* timeinfo = localtime(&rawtime);
+  // Klargør display
+  display.clearDisplay();
+  // Setter skriftstørelsen
+  display.setTextSize(1);
+  // Setter farge
+  display.setTextColor(WHITE);
+  // Setter pekerkoordinater
+  display.setCursor(0, 0);
+  display.print("The time is:");
+  // Setter skriftstørelsen
+  display.setTextSize(2);
+  // Setter farge
+  display.setTextColor(WHITE);
+  // Setter pekerkoordinater
+  display.setCursor(40, 10);
+  // Printer tiden på lokalt display
+  display.print(timeinfo->tm_hour);
+  display.print(":");
+  // Legger til 0 bak ":" hvis tiden er under 10 min
+  if ( timeinfo->tm_min < 10)
+    display.print("0");
+  display.print(timeinfo->tm_min);
+}
+
+// Lokalt display brannalarm
+void displayFire() 
+{
+  // Klargør display
+  display.clearDisplay();
+  // Setter skriftstørelsen
+  display.setTextSize(2);
+  // Setter farge
+  display.setTextColor(WHITE);
+  // Setter pekerkoordinater
+  display.setCursor(40, 10);
+  // Printer til serial
+  display.print("FIRE!");
+}
+
+//Brannalarm funksjon
+void fireSensorProcessing()
+{
+  int fireSensorDetect = digitalRead(fireSensor);     // Leser inngangen på fireSensor
+  // Hvis fireSensorDetect får en 1, går alarmen
+  if (fireSensorDetect == 1) {
+    // Printer til Serial
+    Serial.println("FIRE!!!!!");
+    Serial.println(fireSensorDetect);
+    // Bestemmer hvilken LED som skal skru seg på
+    ledcWrite(channelRedLED, 255);
+    ledcWrite(channelGreenLED, 0);
+    ledcWrite(channelBlueLED, 0);
+    // Skrur på buzzer
+    ledcWriteTone(channelBuzzer, 1000);
+    // Kaller på fire display
+    displayFire();
+    // Skrur på displayet
+    display.display();
+    delay(5000);
+    // Skrur av buzzer
+    ledcWriteTone(channelBuzzer, 0);
+  }
+}
+
+// // Lokalt display for øl som blir tatt
+void displayNoBeer() 
+{
+  // Klargør display
+  display.clearDisplay();
+  // Setter skriftstørelsen
+  display.setTextSize(2);
+  // Setter farge
+  display.setTextColor(WHITE);
+  // Setter pekerkoordinater
+  display.setCursor(20,10);
+  // Printer til serial
+  Serial.print("");
+  Serial.println("Beer taken!");
+  display.print("NO BEER!");
+  // Skrur på displayet
+  display.display();
+}
+
+// Alarmfunksjon for "øl-sensoren"
+void beerAlarm() 
+{
+  // Bestemmer hvilken LED som skal skru seg på
+  ledcWrite(channelRedLED, 255);
+  ledcWrite(channelGreenLED, 0);
+  ledcWrite(channelBlueLED, 0);
+  ledcWriteTone(channelBuzzer, 1000);   // Skrur på buzzer 
+  // Kaller på noBeer display
+  displayNoBeer();
+  display.display();                    // Skrur på displayet
+  delay(5000);
+  ledcWriteTone(channelBuzzer, 0);      // Skrur av buzzer
+}
+
+// Funkjson som reagerer på beskjeder fra Raspberry Pi
+void callback(char* topic, byte* payload, unsigned int length)
+{
+  // Printer til serial
+  Serial.print("Topic: ");
+  Serial.println(topic);
+  Serial.print("Payload: ");
+  Serial.print((int)payload[0]);
+
+  // Skrur av eller på alarm ved beskjed fra Raspberry Pi
+  if ((int)payload[0] == 49) {
+    alarmState = (alarmState + 1) % 2;
+    Serial.print("Alarm state if");
+    Serial.print((int)payload[0]);
+    // Sender alarmstate til server 
+    char buffer2[64];
+    int stusReturn = snprintf(buffer2, sizeof buffer2, "%d", alarmState); // Konverteringskode som muligjør sending til MQTT
+    // Publiser til server
+    client.publish("homeassistant/esp/alarmstatus", buffer2);             // Sender alarmstatus til server
+  }
+  
+  // Skrur på alarm ved signal fra beerSensor og hvis alarm er aktivert fra Pi'en
+  if (alarmState == 0) {
+    // Hvis ESP32 mottar ASCII kode 48 fra serveren
+    if ((int)payload[0] == 48) {
+      // Kaller på BeerAlarm
+      beerAlarm();
+      // Bestemmer hvilken LED som skal skru seg på
+      ledcWrite(channelRedLED, 255);
+      ledcWrite(channelGreenLED, 0);
+      ledcWrite(channelBlueLED, 0);
+      // Printer til serial
+      Serial.println("Vi er i if-setning");
+      Serial.print((int)payload[0]);
+      delay(2000);
+    }  
+  }
+ 
+  Serial.println();
+  Serial.println("-----------------------");
+}
+
+// Hovedprogram
+void loop()
+{
+  // Raspberry PI server
+  client.loop();
+  
+  // Lokalt LED lys for visuell feedback
+  // Indikerer normal temperatur
+  if (tempLocal < 26.00 && tempLocal > 15.00)  {
+    ledcWrite(channelRedLED, 0);
+    ledcWrite(channelGreenLED, 255);
+    ledcWrite(channelBlueLED, 0);
+  }
+  
+  if (tempLocal >= 26.00)  { // Indikerer for varm temperatur
+    ledcWrite(channelRedLED, 255);
+    ledcWrite(channelGreenLED, 0);
+    ledcWrite(channelBlueLED, 0);
+  }
+  
+  if (tempLocal <= 15.00)  { // Indikerer for kald temperatur
+    ledcWrite(channelRedLED, 0);
+    ledcWrite(channelGreenLED, 0);
+    ledcWrite(channelBlueLED, 255);
+  }
+
+  // Brann-sensor er alltid på i bakgrunn
+  fireSensorProcessing();
+
+  // Kaller på display-funksjon
+  switch (var) {
+    case 1:
+      displayTemp();
+      display.display();
+      break;
+    case 2:
+      displayTime();
+      display.display();
+      break;
+  }
+
+  // Oppdaterer "var" i switch-case ved knappetrykk
+  if (digitalRead(buttonPin) == LOW) {
+    if (var == 1) {
+      var = 2;
+    }
+    else  {
+      var = 1;
+    }
+  }
+}
