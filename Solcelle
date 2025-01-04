@@ -17,7 +17,7 @@ Adafruit_SSD1306 display(OLED_RESET);
 
 // Solcelle 
 #define solarCell 36 // ESP32 pin GIOP36 (ADC0)
-int brightness;
+int   brightness;
 float voltage;
 
 // SSID & Password - telefon
@@ -27,7 +27,7 @@ const char* password = "6h5yV6TU";   // Enter your Password here
 // Server login
 // bytt ut alle brukernavn og passord med deres egne.
 const char* mqttServer = "192.168.10.160";
-const int mqttPort = 1883;
+const int   mqttPort = 1883;
 const char* mqttUser = "mqtt_user";
 const char* mqttPassword = "#mqtt1213";
 
@@ -53,14 +53,11 @@ void setup()
   Serial.println(WiFi.localIP());         // Vis ESP32 IP i serial
   delay(3000);                            // Delay som gir oss tid til å kopiere IP - kan slettes
 
-  pinMode(buttonPin,  INPUT);             //Setter opp button
-
-
   // Skru på OLED skjerm
   Wire.begin();
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
 
-  //Server tilkobling
+  // Server tilkobling
   client.setCallback(callback);           // Setter opp "lytting fra Pi"
   WiFi.mode(WIFI_STA);                    
   client.setServer(mqttServer, mqttPort);
@@ -80,22 +77,22 @@ void setup()
       delay(2000);
     }
   }
-  client.subscribe("homeassistant/Pie/Solcelle"); // Definerer topic vi subscriber på
+  client.subscribe("homeassistant/Pie/Solcelle");     // Definerer topic vi subscriber på
 }
 
-// Funksjonen for å trekke watt fra solcella og tjene penger fra overskudd
+// Funksjonen for å trekke volt fra solcella og tjene penger fra overskudd
 void solarPanelReading() 
 {
   brightness = analogRead(solarCell);         // Leser inngangen på photoresistor(verdi mellom 0 og 4095)
   voltage = brightness * (3.3/4095);          // Gjør om lysstyrke til volt 
-  //Sender voltageverdien til server     
+  // Sender voltageverdien til server     
   char buffer1[64];
-  int storage = snprintf(buffer1, sizeof buffer1, "%f", voltage);
-  client.publish("homeassistant/esp/solarpanel", buffer1);
+  int storage = snprintf(buffer1, sizeof buffer1, "%f", voltage); // Konverteringskode som muligjør sending til MQTT
+  client.publish("homeassistant/esp/solarpanel", buffer1);        // Sender solarpanel til server
   delay(2000);
 }
 
-// Lokalt display for 
+// Lokalt display for Voltage
 void displayVoltage()
 {  
   // Klargør display
@@ -106,6 +103,7 @@ void displayVoltage()
   display.setTextSize(1);
   // Setter pekerkoordinater
   display.setCursor(0,0);
+  // Printer til serial
   display.print("Voltage: ");
   display.print(voltage);
   display.print(" V");
@@ -130,8 +128,8 @@ void callback(char* topic, byte* payload, unsigned int length)
 // Hovedprogram
 void loop() 
 {
-  client.loop();            //Raspberry PI server
-  solarPanelReading();      //Funksjon
+  client.loop();            // Raspberry PI server
+  solarPanelReading();      // Funksjon
   displayVoltage();         // Henter informasjon til OLED som skal vise voltageverdi.
   display.display();
 }
